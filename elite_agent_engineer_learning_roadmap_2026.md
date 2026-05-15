@@ -193,6 +193,9 @@ prompts/
 tests/prompts/
   test_intent_prompt.py
   test_responsibility_prompt.py
+docs/
+  prompt_design_notes.md
+  prompt_eval_report.md
 ```
 
 ## 达标标准
