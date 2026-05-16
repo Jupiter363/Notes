@@ -3,7 +3,8 @@
 > 文档用途：作为 AI Coding 工具的项目实现指导文件。  
 > 项目定位：用最小工程量实现一个可运行、可观察、可测试的 LangGraph ReAct Demo。  
 > 推荐项目名：`react-notes-agent`  
-> 核心目标：让学习者通过本地 Markdown 笔记检索场景，真正看清 `Agent 节点 → 工具节点 → Observation → Agent 再推理 → 最终回答` 的完整循环。
+> 核心目标：让学习者通过本地 Markdown 笔记检索场景，真正看清 `Agent 节点 → 工具节点 → Observation → Agent 再推理 → 最终回答` 的完整循环。  
+> 本版模型配置：优先支持千问 Qwen 与 DeepSeek V4 Pro，通过 OpenAI-compatible API 统一接入。
 
 ---
 
@@ -95,6 +96,12 @@ python-dotenv
 pytest
 ```
 
+说明：
+
+1. 本项目优先通过 OpenAI-compatible API 接入千问和 DeepSeek V4 Pro，因此仍然使用 `langchain-openai` 的 `ChatOpenAI` 作为统一模型封装。
+2. 千问 DashScope 和 DeepSeek API 都可以通过 `base_url + api_key + model` 的方式接入，主体 LangGraph 代码不需要因为换模型而改动。
+3. 如后续希望直接使用 LangChain 的原生集成，也可以扩展 `langchain-community` 的 `ChatTongyi` 或 `langchain-deepseek` 的 `ChatDeepSeek`，但第一版不建议增加多套模型适配逻辑。
+
 ### 3.2 可选依赖
 
 ```text
@@ -104,20 +111,85 @@ rich：用于美化命令行输出，第一版可不加
 
 ### 3.3 模型选择
 
-默认使用 OpenAI Chat Model，例如：
+本项目默认不使用 OpenAI 官方模型，而是优先支持下面两类模型：
 
 ```text
-gpt-4.1-mini
-gpt-4o-mini
+1. 千问 Qwen：通过阿里云 DashScope / Model Studio 的 OpenAI-compatible 接口调用
+2. DeepSeek V4 Pro：通过 DeepSeek OpenAI-compatible 接口调用
 ```
 
-也可以通过环境变量配置：
+推荐第一版采用统一配置方式：
 
 ```text
-OPENAI_MODEL=gpt-4.1-mini
+MODEL_PROVIDER=qwen 或 deepseek
+LLM_API_KEY=模型平台 API Key
+LLM_BASE_URL=模型平台 OpenAI-compatible base_url
+LLM_MODEL=具体模型名
 ```
 
-AI Coding 时不要把模型名写死在多个文件里，统一放在配置模块或 `.env` 中。
+推荐默认配置：
+
+```text
+MODEL_PROVIDER=deepseek
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-v4-pro
+```
+
+千问示例配置：
+
+```text
+MODEL_PROVIDER=qwen
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL=qwen-plus
+```
+
+如果人在海外或使用国际版阿里云 Model Studio，可以把千问的 `LLM_BASE_URL` 改成：
+
+```text
+https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+```
+
+AI Coding 时不要把模型名、API Key、base_url 写死在多个文件里，统一放在 `src/config.py` 和 `.env` 中。
+
+注意：
+
+1. `.env` 保存真实 API Key，不提交 GitHub。
+2. `.env.example` 只写占位符，用于说明配置格式。
+3. DeepSeek V4 Pro 的模型名统一写成 `deepseek-v4-pro`。
+4. 千问模型名可先用 `qwen-plus`，后续可按账号权限替换为其他 Qwen 模型。
+5. 由于本项目依赖工具调用能力，选择模型时必须优先确认该模型支持 tool calling / function calling。
+
+### 3.4 模型接入策略
+
+第一版采用“统一 OpenAI-compatible 接口”的原因：
+
+```text
+LangGraph 不关心你用哪个模型，它只关心 agent 节点是否返回 AIMessage，以及 AIMessage 里是否包含 tool_calls。
+
+因此模型接入应该被封装在 src/config.py 的 get_chat_model() 中：
+
+.env
+  ↓
+src/config.py 读取 MODEL_PROVIDER / LLM_API_KEY / LLM_BASE_URL / LLM_MODEL
+  ↓
+get_chat_model() 返回 ChatOpenAI 实例
+  ↓
+langgraph_agent.py 执行 get_chat_model().bind_tools(tools)
+```
+
+不要在 `src/langgraph_agent.py` 中直接写：
+
+```python
+ChatOpenAI(model="deepseek-v4-pro", api_key="sk-xxx")
+```
+
+正确方式是：
+
+```python
+model = get_chat_model().bind_tools(tools)
+```
+
+这样后续从 DeepSeek V4 Pro 切换到千问 Qwen，只需要改 `.env`，不需要改状态图、工具节点或路由逻辑。
 
 ---
 
@@ -238,11 +310,37 @@ react-notes-agent/
 `.env.example` 内容：
 
 ```bash
-OPENAI_API_KEY=your_openai_api_key
-OPENAI_MODEL=gpt-4.1-mini
+# =========================================================
+# LLM Provider
+# =========================================================
+# 可选值：qwen / deepseek / openai_compatible
+MODEL_PROVIDER=deepseek
+
+# 真实 API Key 写到本地 .env 中，不要提交 GitHub
+LLM_API_KEY=your_model_api_key
+
+# DeepSeek V4 Pro 默认配置
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-v4-pro
+
+# 千问 DashScope 中国北京区域示例
+# MODEL_PROVIDER=qwen
+# LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# LLM_MODEL=qwen-plus
+
+# 千问 DashScope 国际站新加坡区域示例
+# MODEL_PROVIDER=qwen
+# LLM_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+# LLM_MODEL=qwen-plus
+
+# =========================================================
+# Local Notes
+# =========================================================
 NOTES_DIR=data/notes
 
-# 可选：LangSmith tracing
+# =========================================================
+# Optional: LangSmith tracing
+# =========================================================
 LANGSMITH_TRACING=false
 LANGSMITH_API_KEY=your_langsmith_api_key
 LANGSMITH_PROJECT=react-notes-agent
@@ -251,9 +349,12 @@ LANGSMITH_PROJECT=react-notes-agent
 实现要求：
 
 1. `.env` 不提交 Git；
-2. `OPENAI_API_KEY` 缺失时，运行入口应给出清晰错误提示；
-3. `NOTES_DIR` 默认值为 `data/notes`；
-4. 模型名从 `OPENAI_MODEL` 读取，不要散落在业务代码中。
+2. `LLM_API_KEY` 缺失时，运行入口应给出清晰错误提示；
+3. `LLM_BASE_URL` 缺失时，运行入口应给出清晰错误提示；
+4. `LLM_MODEL` 缺失时，运行入口应给出清晰错误提示；
+5. `NOTES_DIR` 默认值为 `data/notes`；
+6. 模型名、API Key、base_url 都从环境变量读取，不要散落在业务代码中；
+7. `MODEL_PROVIDER` 只作为语义标识和日志标识，真正调用参数以 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL` 为准。
 
 ---
 
@@ -434,7 +535,7 @@ ERROR: invalid expression
 
 ```python
 def agent_node(state: MessagesState):
-    print("[NODE] agent")
+    print(f"[NODE] agent | provider={MODEL_PROVIDER} | model={LLM_MODEL}")
     messages = [SYSTEM_PROMPT] + state["messages"]
     response = model.invoke(messages)
     return {"messages": [response]}
@@ -734,10 +835,14 @@ data/notes/langgraph.md
 实现 `src/config.py`：
 
 ```text
-读取 OPENAI_MODEL
+读取 MODEL_PROVIDER
+读取 LLM_API_KEY
+读取 LLM_BASE_URL
+读取 LLM_MODEL
 读取 NOTES_DIR
 提供默认值
 检查路径
+提供 get_chat_model() 工厂函数
 ```
 
 ### Step 4：实现工具模块
@@ -805,13 +910,91 @@ python -m src.run_langgraph
 ```python
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+MODEL_PROVIDER = os.getenv("MODEL_PROVIDER", "deepseek").strip().lower()
+LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com").strip()
+LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-pro").strip()
 NOTES_DIR = Path(os.getenv("NOTES_DIR", "data/notes"))
+
+
+def validate_llm_config() -> None:
+    """Validate required LLM environment variables before running the agent."""
+    missing = []
+    if not LLM_API_KEY:
+        missing.append("LLM_API_KEY")
+    if not LLM_BASE_URL:
+        missing.append("LLM_BASE_URL")
+    if not LLM_MODEL:
+        missing.append("LLM_MODEL")
+
+    if missing:
+        joined = ", ".join(missing)
+        raise RuntimeError(
+            f"Missing required LLM config: {joined}. "
+            "Please copy .env.example to .env and fill in your model API configuration."
+        )
+
+
+def get_chat_model() -> ChatOpenAI:
+    """Create the chat model used by LangGraph.
+
+    The project uses OpenAI-compatible APIs for both Qwen and DeepSeek V4 Pro.
+    Therefore the graph code can stay unchanged when switching providers.
+    """
+    validate_llm_config()
+    return ChatOpenAI(
+        model=LLM_MODEL,
+        api_key=LLM_API_KEY,
+        base_url=LLM_BASE_URL,
+        temperature=0,
+    )
 ```
+
+### 17.1.1 `.env` 配置示例
+
+DeepSeek V4 Pro：
+
+```bash
+MODEL_PROVIDER=deepseek
+LLM_API_KEY=sk-你的DeepSeekKey
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-v4-pro
+NOTES_DIR=data/notes
+```
+
+千问 Qwen，DashScope 中国北京区域：
+
+```bash
+MODEL_PROVIDER=qwen
+LLM_API_KEY=sk-你的DashScopeKey
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL=qwen-plus
+NOTES_DIR=data/notes
+```
+
+千问 Qwen，DashScope 国际站新加坡区域：
+
+```bash
+MODEL_PROVIDER=qwen
+LLM_API_KEY=sk-你的DashScopeKey
+LLM_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+LLM_MODEL=qwen-plus
+NOTES_DIR=data/notes
+```
+
+说明：
+
+1. `MODEL_PROVIDER` 只是用于日志和可读性。
+2. `LLM_BASE_URL` 决定请求发往哪个平台。
+3. `LLM_MODEL` 决定具体使用哪个模型。
+4. DeepSeek V4 Pro 默认使用 `deepseek-v4-pro`。
+5. 千问默认使用 `qwen-plus`，后续可换成账号支持的其他 Qwen 模型。
 
 ### 17.2 `src/tools.py`
 
@@ -887,20 +1070,16 @@ def calculator(expression: str) -> str:
 ```python
 from typing import Literal
 
-from langchain.chat_models import init_chat_model
 from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.prebuilt import ToolNode
 
-from src.config import OPENAI_MODEL
+from src.config import MODEL_PROVIDER, LLM_MODEL, get_chat_model
 from src.tools import search_notes, calculator
 
 
 tools = [search_notes, calculator]
 
-model = init_chat_model(
-    OPENAI_MODEL,
-    temperature=0,
-).bind_tools(tools)
+model = get_chat_model().bind_tools(tools)
 
 SYSTEM_PROMPT = {
     "role": "system",
@@ -922,7 +1101,7 @@ SYSTEM_PROMPT = {
 
 
 def agent_node(state: MessagesState):
-    print("[NODE] agent")
+    print(f"[NODE] agent | provider={MODEL_PROVIDER} | model={LLM_MODEL}")
     messages = [SYSTEM_PROMPT] + state["messages"]
     response = model.invoke(messages)
     return {"messages": [response]}
@@ -1078,7 +1257,9 @@ python -m src.run_langgraph
 1. 用户问题没有明确提到“笔记”或相关概念；
 2. system prompt 约束不够强；
 3. 工具描述太模糊；
-4. 模型认为自己可以直接回答。
+4. 模型认为自己可以直接回答；
+5. 当前所选模型或接口没有正确返回 `tool_calls`；
+6. 使用的模型不支持 tool calling / function calling。
 
 解决方式：
 
@@ -1110,6 +1291,25 @@ python -m src.run_langgraph
 1. 如果 query 子串在原文中出现，直接加分；
 2. 人工维护关键词映射；
 3. 后续再升级为向量检索。
+
+### 19.5 千问或 DeepSeek V4 Pro API 调不通
+
+优先检查：
+
+1. `.env` 是否真实存在，且没有被命名成 `.env.txt`；
+2. `LLM_API_KEY` 是否填成了对应平台的 Key；
+3. `LLM_BASE_URL` 是否和平台区域匹配；
+4. `LLM_MODEL` 是否是账号当前可调用的模型名；
+5. 是否把真实 Key 写到了 `.env.example` 并误提交到 GitHub；
+6. 当前模型是否支持 tool calling，否则 ReAct 工具循环可能无法触发。
+
+推荐排查命令：
+
+```bash
+python -c "from src.config import MODEL_PROVIDER, LLM_BASE_URL, LLM_MODEL; print(MODEL_PROVIDER, LLM_BASE_URL, LLM_MODEL)"
+```
+
+如果配置能打印，但调用失败，说明问题大概率在 API Key 权限、模型名或 base_url 区域。
 
 ---
 
