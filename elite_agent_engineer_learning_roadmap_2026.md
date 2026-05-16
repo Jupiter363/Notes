@@ -1119,19 +1119,7 @@ docs/deployment.md
 | 项目 | SmartKB-Agent |
 | 简历描述 | 构建企业级知识库 Agent，支持混合检索、引用校验、权限过滤和 RAG 自动评估 |
 
-## 场景 3：代码开发 Agent
-
-| 项目 | 内容 |
-|---|---|
-| 业务流程 | 读 issue、理解代码、定位 bug、生成 patch、运行测试 |
-| 工具 | Git、文件系统、测试框架、静态分析 |
-| 数据 | GitHub issue、repo、测试用例 |
-| 风险 | 破坏代码、安全执行 |
-| 指标 | Patch Pass Rate、Test Pass Rate |
-| 项目 | CodeFix-Agent |
-| 简历描述 | 实现面向代码仓库的自动修复 Agent，支持代码检索、测试生成、补丁验证和失败回放 |
-
-## 场景 4：数据分析 Agent
+## 场景 3：数据分析 Agent
 
 | 项目 | 内容 |
 |---|---|
@@ -1143,7 +1131,7 @@ docs/deployment.md
 | 项目 | DataAnalyst-Agent |
 | 简历描述 | 构建数据分析 Agent，支持 NL2SQL、指标解释、图表生成和分析报告输出 |
 
-## 场景 5：受限医疗 / 金融 Agent
+## 场景 4：受限医疗 / 金融 Agent
 
 | 项目 | 内容 |
 |---|---|
