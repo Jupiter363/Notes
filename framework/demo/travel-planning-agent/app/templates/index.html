@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>旅行规划助手</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+    <h1>&#9992;&#65039; 旅行规划助手 <span class="badge">LangChain + LangGraph</span></h1>
+    <div style="display:flex;align-items:center;gap:16px;">
+        <span class="session-info" id="sessionInfo"></span>
+        <button class="new-session-btn" onclick="newSession()">新建会话</button>
+    </div>
+</div>
+
+<!-- Chat area -->
+<div class="chat-container" id="chatContainer">
+    <div class="welcome" id="welcomeMessage">
+        <div class="icon">&#127757;</div>
+        <h2>你好，我是你的旅行规划助手</h2>
+        <p>
+            试试输入：<em>"我想6月底去成都玩3天，预算3000元，喜欢美食和轻松路线"</em><br>
+            信息不完整也没关系，我会主动追问。
+        </p>
+    </div>
+</div>
+
+<!-- Input area -->
+<div class="input-area">
+    <label class="review-toggle" title="开启后 Agent 会自我审查并循环修正计划，展示完整思考过程">
+        <input type="checkbox" id="reviewMode" checked>
+        <span>深度审查</span>
+    </label>
+    <input
+        type="text"
+        id="userInput"
+        placeholder="描述你的旅行需求..."
+        autocomplete="off"
+        onkeydown="if(event.key==='Enter')sendMessage()"
+    >
+    <button id="sendBtn" onclick="sendMessage()">发送</button>
+</div>
+
+<script>
+// ── State ──
+let sessionId = null;
+let abortController = null;
+
+// ── Helpers ──
+function $$(id) { return document.getElementById(id); }
+
+function hideWelcome() {
+    const w = $$('welcomeMessage');
+    if (w) w.style.display = 'none';
+}
+
+function scrollToBottom() {
+    const c = $$('chatContainer');
+    c.scrollTop = c.scrollHeight;
+}
+
+function setLoading(loading) {
+    $$('sendBtn').disabled = loading;
+    $$('userInput').disabled = loading;
+}
+
+// ── Render ──
+
+function addUserMessage(text) {
+    hideWelcome();
+    const div = document.createElement('div');
+    div.className = 'message user';
+    div.innerHTML = `<div class="avatar">&#128100;</div><div class="bubble">${escapeHtml(text)}</div>`;
+    $$('chatContainer').appendChild(div);
+    scrollToBottom();
+}
+
+function addProgressPanel() {
+    const reviewMode = $$('reviewMode').checked;
+    const title = reviewMode ? '审查模式：生成 → 审查 → 修正 → 再审查' : '快速模式';
+    const div = document.createElement('div');
+    div.className = 'message assistant';
+    div.id = 'progressMessage';
+    div.innerHTML = `
+        <div class="avatar">&#9992;</div>
+        <div class="bubble" style="min-width:360px;">
+            <div style="font-weight:600;margin-bottom:8px;color:#333;font-size:13px;">${title}</div>
+            <div id="progressList" style="display:flex;flex-direction:column;gap:4px;"></div>
+            <div id="thinkingBlock" style="display:none;"></div>
+        </div>`;
+    $$('chatContainer').appendChild(div);
+    scrollToBottom();
+}
+
+function addProgressStep(msg) {
+    const list = $$('progressList');
+    if (!list) return;
+    const step = document.createElement('div');
+    step.className = 'progress-step';
+    step.innerHTML = `<span class="progress-dot">✅</span><span>${escapeHtml(msg)}</span>`;
+    list.appendChild(step);
+    scrollToBottom();
+}
+
+// ── 打字机流式输出 ──
+
+let _streamingActive = false;
+let _streamingContainer = null;
+let _streamingText = '';
+let _tokenFlushTimer = null;
+
+function _getOrCreateThinkingBlock() {
+    if (_streamingActive) return;
+    _streamingActive = true;
+
+    const block = $$('thinkingBlock');
+    block.style.display = 'block';
+    block.innerHTML = '';
+
+    const header = document.createElement('div');
+    header.className = 'thinking-header';
+    header.innerHTML = '<span class="thinking-indicator"></span>思考中...';
+    header.onclick = function() {
+        const body = this.nextElementSibling;
+        body.style.display = body.style.display === 'none' ? 'block' : 'none';
+        this.querySelector('.collapse-icon').textContent = body.style.display === 'none' ? '▶' : '▼';
+    };
+    block.appendChild(header);
+
+    _streamingContainer = document.createElement('div');
+    _streamingContainer.className = 'thinking-body streaming';
+    _streamingContainer.id = 'streamingContent';
+    block.appendChild(_streamingContainer);
+
+    _streamingText = '';
+}
+
+function appendToken(token) {
+    _getOrCreateThinkingBlock();
+    _streamingText += token;
+
+    // 批量刷新：每 50ms 把累积的 token 写入 DOM，避免每次刷新
+    if (!_tokenFlushTimer) {
+        _tokenFlushTimer = setTimeout(() => {
+            _tokenFlushTimer = null;
+            if (_streamingContainer) {
+                _streamingContainer.textContent = _streamingText;
+                scrollToBottom();
+            }
+        }, 30);
+    }
+}
+
+function _flushTokens() {
+    if (_tokenFlushTimer) {
+        clearTimeout(_tokenFlushTimer);
+        _tokenFlushTimer = null;
+    }
+    if (_streamingContainer) {
+        _streamingContainer.textContent = _streamingText;
+    }
+}
+
+function closeThinkingBlock(label) {
+    _flushTokens();
+    _streamingActive = false;
+
+    const block = $$('thinkingBlock');
+    if (!block || !_streamingText) return;
+
+    // 更新标题
+    const header = block.querySelector('.thinking-header');
+    const icon = header.querySelector('.thinking-indicator');
+    if (icon) icon.className = 'thinking-done';
+    header.innerHTML = header.innerHTML.replace('思考中...', label || '思考完成');
+
+    // 添加折叠图标
+    if (!header.querySelector('.collapse-icon')) {
+        header.innerHTML += '<span class="collapse-icon">▼</span>';
+    }
+
+    // 停止 streaming 动画样式
+    const body = block.querySelector('.thinking-body');
+    if (body) body.classList.remove('streaming');
+
+    // 重置，准备下一个思考块
+    _streamingText = '';
+    _streamingContainer = null;
+
+    // 下一个 LLM 节点会创建新的 thinking block
+    $$('thinkingBlock').style.display = 'none';
+}
+
+function removeProgressPanel() {
+    _flushTokens();
+    const p = $$('progressMessage');
+    if (p) p.remove();
+    _streamingActive = false;
+    _streamingText = '';
+    _streamingContainer = null;
+}
+
+function addAssistantMessage(html) {
+    hideWelcome();
+    const div = document.createElement('div');
+    div.className = 'message assistant';
+    div.innerHTML = `<div class="avatar">&#9992;</div><div class="bubble">${html}</div>`;
+    $$('chatContainer').appendChild(div);
+    scrollToBottom();
+}
+
+function addStatusRow(stopReason, revisionCount) {
+    const div = document.createElement('div');
+    div.className = 'status-row';
+    const reasons = {
+        'accepted_by_reflection': '✅ 方案已通过审查',
+        'max_revision_reached': '⚠️ 已达最大修正次数',
+        'final_output': '✅ 已生成最终方案',
+    };
+    const reasonText = reasons[stopReason] || stopReason;
+    div.innerHTML = `<span>${reasonText}</span><span>修正轮次: ${revisionCount}</span>`;
+    $$('chatContainer').appendChild(div);
+    scrollToBottom();
+}
+
+// ── SSE streaming ──
+
+async function sendMessage() {
+    const input = $$('userInput');
+    const text = input.value.trim();
+    if (!text) return;
+
+    addUserMessage(text);
+    input.value = '';
+    setLoading(true);
+
+    try {
+        if (sessionId) {
+            await streamContinue(text);
+        } else {
+            await streamCreate(text);
+        }
+    } catch (e) {
+        removeProgressPanel();
+        addAssistantMessage(`<strong style="color:#c62828;">请求失败：</strong>${escapeHtml(e.message)}`);
+    } finally {
+        setLoading(false);
+        input.focus();
+    }
+}
+
+async function streamCreate(userInput) {
+    addProgressPanel();
+
+    const reviewMode = $$('reviewMode').checked;
+    const maxRev = reviewMode ? 2 : 0;
+
+    const resp = await fetch('/api/travel-plan/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_input: userInput, max_revision_count: maxRev }),
+    });
+
+    await readStream(resp, true);
+}
+
+async function streamContinue(userInput) {
+    addProgressPanel();
+
+    const resp = await fetch(`/api/travel-plan/${sessionId}/continue/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_input: userInput }),
+    });
+
+    await readStream(resp, false);
+}
+
+async function readStream(resp, isNew) {
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    // 哪些节点会产生 LLM token 流
+    const llmNodes = ['generate_plan', 'reflect_plan', 'revise_plan'];
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const json = line.slice(6);
+            try {
+                const event = JSON.parse(json);
+                if (event.type === 'token') {
+                    // LLM 吐出的每一个 token，立即追加到思考块
+                    appendToken(event.token);
+                } else if (event.type === 'progress') {
+                    // LLM 节点完成 → 关闭思考块，显示完成步骤
+                    if (llmNodes.includes(event.node)) {
+                        closeThinkingBlock(event.message);
+                    }
+                    addProgressStep(event.message);
+                } else if (event.type === 'done') {
+                    closeThinkingBlock('思考完成');
+                    removeProgressPanel();
+                    handleResponse(event.data, isNew);
+                } else if (event.type === 'error') {
+                    removeProgressPanel();
+                    addAssistantMessage(`<strong style="color:#c62828;">错误：</strong>${escapeHtml(event.message)}`);
+                }
+            } catch (e) {
+                // 忽略解析错误
+            }
+        }
+    }
+}
+
+function handleResponse(data, isNew) {
+    if (isNew && data.session_id) {
+        sessionId = data.session_id;
+    }
+    updateSessionDisplay();
+
+    if (data.status === 'need_user_clarification') {
+        let html = marked.parse(data.message || '') || '';
+        if (data.clarification_questions && data.clarification_questions.length > 0) {
+            html += '<div class="clarification-box">';
+            html += '<div class="title">&#128269; 还需要补充以下信息：</div><ul>';
+            data.clarification_questions.forEach(q => { html += `<li>${escapeHtml(q)}</li>`; });
+            html += '</ul></div>';
+        }
+        addAssistantMessage(html);
+    } else if (data.status === 'completed') {
+        const html = marked.parse(data.final_plan || '') || '';
+        addAssistantMessage(html);
+        addStatusRow(data.stop_reason, data.revision_count);
+    } else if (data.status === 'error') {
+        addAssistantMessage(`<strong style="color:#c62828;">错误：</strong>${escapeHtml(data.message || '')}`);
+    }
+}
+
+// ── Session management ──
+
+function updateSessionDisplay() {
+    if (sessionId) {
+        $$('sessionInfo').textContent = '会话: ' + sessionId;
+    } else {
+        $$('sessionInfo').textContent = '';
+    }
+}
+
+function newSession() {
+    sessionId = null;
+    $$('chatContainer').innerHTML = `
+        <div class="welcome" id="welcomeMessage">
+            <div class="icon">&#127757;</div>
+            <h2>你好，我是你的旅行规划助手</h2>
+            <p>
+                试试输入：<em>"我想6月底去成都玩3天，预算3000元，喜欢美食和轻松路线"</em><br>
+                信息不完整也没关系，我会主动追问。
+            </p>
+        </div>`;
+    $$('userInput').value = '';
+    updateSessionDisplay();
+    $$('userInput').focus();
+}
+
+// ── Util ──
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// ── Init ──
+
+$$('userInput').focus();
+</script>
+
+</body>
+</html>
