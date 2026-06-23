@@ -2,6 +2,7 @@ README.md
 pyproject.toml
 app/__init__.py
 app/main.py
+app/server.py
 app/chains/__init__.py
 app/chains/parse_chain.py
 app/chains/plan_chain.py

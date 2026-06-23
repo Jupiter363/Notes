@@ -1,0 +1,26 @@
+# API keys - NEVER commit real credentials
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# Testing
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Planning files (local only)
+task_plan.md
+findings.md
+progress.md
